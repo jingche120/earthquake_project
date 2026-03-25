@@ -1,0 +1,19 @@
+# 1. 你自訂不想上傳的資料夾或檔案 (請將 my_data 替換成你實際的資料夾名稱)
+extracted_waveforms/
+source/all_metadata.csv
+# 2. 作業系統自動產生的隱藏檔
+.DS_Store
+
+# 3. Python 相關暫存檔與虛擬環境
+__pycache__/
+*.pyc
+venv/
+.env
+
+# 4. 機器學習/深度學習相關的模型權重檔 (避免把龐大的模型推送到 GitHub)
+*.h5
+*.pth
+*.pt
+*.hdf5
+# 5. Jupyter Notebook 暫存檔
+.ipynb_checkpoints/

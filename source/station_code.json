@@ -1,0 +1,11 @@
+{
+    "Hualien": [
+        "TWF1", "TWD", "SHUL", "HWA", "FULB", "EYUL", "EYL", "ETM", 
+        "ETLH", "ETL", "ESL", "EHYH", "EHY", "EHP", "EGFH", "EGC"
+    ],
+    "Taipei": [
+        "ZUZH", "TWA", "TAP", "NHY", "ANP", "TWY", "TWS1", "TWB1", 
+        "TIPB", "NWR", "NWL", "NWF", "NTS", "NSM", "NHDH", "BAC"
+    ]
+}
+
