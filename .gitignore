@@ -1,6 +1,6 @@
 # 1. 你自訂不想上傳的資料夾或檔案 (請將 my_data 替換成你實際的資料夾名稱)
 extracted_waveforms/
-source/all_metadata.csv
+source/
 # 2. 作業系統自動產生的隱藏檔
 .DS_Store
 
