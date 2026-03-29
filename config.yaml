@@ -1,0 +1,35 @@
+# config.yaml
+# ============ 資料路徑 ============
+data:
+  h5_path: "D:/filtered_by_Hualien_events_extracted_waveforms/train_data.h5"
+  station_json: "C:/Users/user/Desktop/L_Earthquake_Model/earthquake_project/source/all_stastion_info.json"
+  adj_path: "C:/Users/user/Desktop/L_Earthquake_Model/earthquake_project/source/adj.npy"
+  split_index_dir: "C:/Users/user/Desktop/L_Earthquake_Model/earthquake_project/split_indices"   # 儲存切割後的 index，確保 train/test 可重現
+# ---- 資料切割 ----
+# 流程：先抽 test → 剩餘再切 train / val
+split:
+  num_test_events: 10      # 先抽出 10 筆作為測試集
+  train_ratio: 0.7         # 剩餘的 70% 訓練
+  val_ratio: 0.3           # 剩餘的 30% 驗證
+# ============ 模型設定 ============
+model:
+  model_dir: "./parameter/gat_166sta_v1"
+  num_stations: 166
+# ============ 訓練參數 ============
+train:
+  batch_size: 16
+  num_epochs: 50
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  patience: 20
+  seed: 42
+  date: "166sta_v1"
+  loss:
+    alpha: 1.2
+    beta: 1.0
+  scheduler:
+    factor: 0.1
+    patience: 6
+# ============ 測試參數 ============
+test:
+  output_dir: "C:/Users/user/Desktop/L_Earthquake_Model/earthquake_project/test_results"
