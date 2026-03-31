@@ -1,0 +1,75 @@
+{
+  "model": {
+    "IN_CHANNELS": 3,
+    "M_TGT": 166,
+    "N_SRC": 21,
+    "SEQ_LEN": 3000,
+    "cnn_dropout": 0.1,
+    "cnn_feat_maps": 128,
+    "cnn_kernel": 3,
+    "d": 128,
+    "d_loc": 64,
+    "d_wave": 128,
+    "decoder_hidden": 128,
+    "lambd": 5.0,
+    "n_heads": 2,
+    "n_transformer": 2,
+    "patch_size": 5,
+    "pe_freqs": 32,
+    "pool_dropout": 0.5,
+    "proj_dim": 100,
+    "tfm_dropout": 0.1,
+    "tfm_mlp_dim": 200
+  },
+  "train": {
+    "batch_size": 2,
+    "epochs": 1,
+    "lr": 0.001,
+    "min_delta": 0.0001,
+    "patience": 20,
+    "save_every": 10,
+    "use_amp": true,
+    "warmup_epochs": 5,
+    "weight_decay": 0.0001
+  },
+  "data": {
+    "n_events": 1683,
+    "n_train": 1171,
+    "n_val": 502,
+    "n_test": 10,
+    "n_train_after_aug": 1271,
+    "src_stations": [
+      "EGFH",
+      "ESL",
+      "HWA",
+      "EHY",
+      "TWD",
+      "TWF1",
+      "TWT",
+      "WHF",
+      "OWD",
+      "ETLH",
+      "FUSS",
+      "EYUL",
+      "ETM",
+      "EYL",
+      "EGC",
+      "ETL",
+      "EHP",
+      "ECB",
+      "EAH",
+      "SHUL",
+      "EHYH"
+    ],
+    "augmentation": {
+      "enable": true,
+      "top_k": 100,
+      "oversample_times": 1,
+      "flip_prob": 0.5,
+      "scale_range": [
+        0.8,
+        1.2
+      ]
+    }
+  }
+}
