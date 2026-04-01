@@ -251,7 +251,7 @@ class WaveformExtractor(nn.Module):
         """
         B, N, C, L = waveforms.shape
 
-        # 計算 max absolute amplitude (論文設計)
+        # 計算 max absolute amplitude (論文設計)最大振幅
         max_amp = waveforms.abs().flatten(2).max(dim=-1).values  # (B, N)
         max_amp = max_amp.unsqueeze(-1)  # (B, N, 1)
 
@@ -262,7 +262,7 @@ class WaveformExtractor(nn.Module):
         x = self.conv_block1(x)  # (B*N, 128, 3000)
         x = self.conv_block2(x)  # (B*N, 128, 3000)
 
-        # Patch Embedding
+        # Patch Embedding 將 Patch 轉換為 Token
         x = self.patch_embed(x)  # (B*N, n_patches, proj_dim)
 
         # Transformer
@@ -374,6 +374,7 @@ class RegressionDecoder(nn.Module):
     規格書 §4 Module D:
     Residual: output = C_tgt + Q   → (B, M, d)
     MLP → PGA prediction (B, M, 1)
+    Residual Connection（殘差連接）**與 MLP（多層感知機）降維
     """
     def __init__(self, cfg: ModelConfig):
         super().__init__()

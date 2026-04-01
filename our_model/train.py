@@ -570,9 +570,9 @@ def main(args):
     np.savez(output_dir / "history.npz", **{k: np.array(v) for k, v in history.items()})
     print(f"\nDone. Best val_loss: {best_val_loss:.6f}")
 
-    # ---- Test ----
-    print("\n--- Test ---")
-    test_ds = EEWDataset(data_dir, event_folders, test_idx, pga_labels, station_mgr, aug_cfg=None)  # test 不擴增
+    # ---- Test & Visualization ----
+    print("\n--- Test & Visualization ---")
+    test_ds = EEWDataset(data_dir, event_folders, test_idx, pga_labels, station_mgr, aug_cfg=None)
     test_loader = DataLoader(
         test_ds, batch_size=train_cfg.batch_size, shuffle=False,
         collate_fn=collate_fn, num_workers=4, pin_memory=True, persistent_workers=True
@@ -584,6 +584,322 @@ def main(args):
 
     with open(output_dir / "test_results.json", "w") as f:
         json.dump({"test_loss": test_loss, "test_mae": test_mae, "test_mse": test_mse}, f, indent=2)
+
+    # 收集所有 test 預測
+    test_preds, test_reals = collect_test_predictions(
+        model, test_loader, device, train_cfg.use_amp
+    )
+
+    # 產生視覺化
+    fig_dir = output_dir / "figures"
+    fig_dir.mkdir(exist_ok=True)
+
+    plot_loss_curve(output_dir / "history.npz", fig_dir)
+    plot_scatter(test_preds, test_reals, fig_dir)
+    plot_per_event_mae(test_preds, test_reals, test_idx, event_folders, fig_dir)
+    plot_intensity_heatmaps(
+        test_preds, test_reals, test_idx, event_folders,
+        station_mgr, fig_dir, top_n=None  # None = 畫全部 test 事件
+    )
+
+    # 儲存預測結果 CSV (供後續分析)
+    save_predictions_csv(test_preds, test_reals, test_idx, event_folders, station_mgr, output_dir)
+    print(f"\n  All outputs saved to: {output_dir}")
+
+
+# =============================================================================
+# 9. Visualization & Analysis Functions
+# =============================================================================
+
+def pga_to_intensity(pga_val):
+    """PGA (gal) → 台灣氣象署震度等級 (0~9)"""
+    if pga_val < 0.8:    return 0
+    elif pga_val < 2.5:  return 1
+    elif pga_val < 8.0:  return 2
+    elif pga_val < 25.0: return 3
+    elif pga_val < 80.0: return 4
+    elif pga_val < 140.0: return 5
+    elif pga_val < 250.0: return 6
+    elif pga_val < 440.0: return 7
+    elif pga_val < 800.0: return 8
+    else:                 return 9
+
+
+@torch.no_grad()
+def collect_test_predictions(model, loader, device, use_amp):
+    """收集 test set 所有預測，回傳 (N_test, 166, 1) tensors"""
+    model.eval()
+    all_preds, all_reals = [], []
+    for y_src, x_src, x_tgt, pga_real, src_mask in loader:
+        y_src = y_src.to(device)
+        x_src = x_src.to(device)
+        x_tgt = x_tgt.to(device)
+        with autocast("cuda", enabled=use_amp):
+            pga_pred = model(y_src, x_src, x_tgt)
+        all_preds.append(pga_pred.cpu())
+        all_reals.append(pga_real.cpu())
+    return torch.cat(all_preds, dim=0), torch.cat(all_reals, dim=0)
+
+
+def save_predictions_csv(test_preds, test_reals, test_idx, event_folders, station_mgr, output_dir):
+    """儲存預測結果為 CSV，方便後續分析"""
+    import csv
+    rows = []
+    for i in range(test_preds.shape[0]):
+        event_name = event_folders[test_idx[i]]
+        for j in range(test_preds.shape[1]):
+            true_pga = test_reals[i, j, 0].item()
+            pred_pga = test_preds[i, j, 0].item()
+            if true_pga > 0:
+                rows.append({
+                    "event_index": test_idx[i],
+                    "event_name": event_name,
+                    "station": station_mgr.all_names[j],
+                    "longitude": station_mgr.all_coords[j, 0],
+                    "latitude": station_mgr.all_coords[j, 1],
+                    "true_pga": true_pga,
+                    "pred_pga": pred_pga,
+                    "true_intensity_level": pga_to_intensity(true_pga),
+                    "pred_intensity_level": pga_to_intensity(pred_pga),
+                })
+
+    csv_path = output_dir / "predictions.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"  ✓ predictions.csv ({len(rows)} rows)")
+
+
+def plot_loss_curve(history_path, fig_dir):
+    """繪製 train/val loss + MAE + LR schedule"""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("  [SKIP] matplotlib not installed")
+        return
+
+    data = np.load(history_path)
+    epochs = np.arange(1, len(data["train_loss"]) + 1)
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+    axes[0].plot(epochs, data["train_loss"], label="Train", linewidth=1.5)
+    axes[0].plot(epochs, data["val_loss"], label="Val", linewidth=1.5)
+    axes[0].set_xlabel("Epoch")
+    axes[0].set_ylabel("Loss (Asymmetric MSE)")
+    axes[0].set_title("Training & Validation Loss")
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+
+    axes[1].plot(epochs, data["val_mae"], color="green", linewidth=1.5)
+    axes[1].set_xlabel("Epoch")
+    axes[1].set_ylabel("MAE (gal)")
+    axes[1].set_title("Validation MAE")
+    axes[1].grid(True, alpha=0.3)
+
+    axes[2].plot(epochs, data["lr"], color="orange", linewidth=1.5)
+    axes[2].set_xlabel("Epoch")
+    axes[2].set_ylabel("Learning Rate")
+    axes[2].set_title("LR Schedule")
+    axes[2].set_yscale("log")
+    axes[2].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(fig_dir / "loss_curve.png", dpi=200, bbox_inches="tight")
+    plt.close()
+    print("  ✓ loss_curve.png")
+
+
+def plot_scatter(test_preds, test_reals, fig_dir):
+    """Predicted PGA vs True PGA scatter plot (linear + log scale)"""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("  [SKIP] matplotlib not installed")
+        return
+
+    valid = (test_reals > 0).squeeze(-1)
+    preds = test_preds.squeeze(-1)[valid].numpy()
+    reals = test_reals.squeeze(-1)[valid].numpy()
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    # Linear
+    ax = axes[0]
+    ax.scatter(reals, preds, alpha=0.3, s=10, c="steelblue", edgecolors="none")
+    lim = max(reals.max(), preds.max()) * 1.1
+    ax.plot([0, lim], [0, lim], "r--", linewidth=1, label="y=x")
+    ax.set_xlabel("True PGA (gal)")
+    ax.set_ylabel("Predicted PGA (gal)")
+    ax.set_title("Linear Scale")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # Log
+    ax = axes[1]
+    mask = (reals > 0) & (preds > 0)
+    ax.scatter(reals[mask], preds[mask], alpha=0.3, s=10, c="steelblue", edgecolors="none")
+    ax.plot([reals[mask].min(), reals[mask].max()],
+            [reals[mask].min(), reals[mask].max()], "r--", linewidth=1, label="y=x")
+    ax.set_xlabel("True PGA (gal)")
+    ax.set_ylabel("Predicted PGA (gal)")
+    ax.set_title("Log Scale")
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.legend()
+    ax.grid(True, alpha=0.3, which="both")
+
+    mae = np.abs(preds - reals).mean()
+    ss_res = np.sum((reals - preds) ** 2)
+    ss_tot = np.sum((reals - reals.mean()) ** 2)
+    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
+    fig.suptitle(f"Test PGA — MAE={mae:.3f} gal, R²={r2:.3f}", fontsize=14, y=1.02)
+
+    plt.tight_layout()
+    plt.savefig(fig_dir / "scatter_pga.png", dpi=200, bbox_inches="tight")
+    plt.close()
+    print(f"  ✓ scatter_pga.png (MAE={mae:.3f}, R²={r2:.3f})")
+
+
+def plot_per_event_mae(test_preds, test_reals, test_idx, event_folders, fig_dir):
+    """Per-event MAE bar chart"""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("  [SKIP] matplotlib not installed")
+        return
+
+    n = test_preds.shape[0]
+    maes, labels = [], []
+    for i in range(n):
+        valid = test_reals[i].squeeze(-1) > 0
+        mae = (test_preds[i][valid] - test_reals[i][valid]).abs().mean().item() if valid.any() else 0.0
+        maes.append(mae)
+        labels.append(event_folders[test_idx[i]])
+
+    fig, ax = plt.subplots(figsize=(max(8, n * 0.8), 5))
+    ax.bar(range(n), maes, color="steelblue", edgecolor="navy", alpha=0.8)
+    ax.set_xticks(range(n))
+    ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
+    ax.set_xlabel("Event ID")
+    ax.set_ylabel("MAE (gal)")
+    ax.set_title("Per-Event MAE on Test Set")
+    ax.axhline(y=np.mean(maes), color="red", linestyle="--", linewidth=1, label=f"Mean={np.mean(maes):.3f}")
+    ax.legend()
+    ax.grid(True, alpha=0.3, axis="y")
+    plt.tight_layout()
+    plt.savefig(fig_dir / "per_event_mae.png", dpi=200, bbox_inches="tight")
+    plt.close()
+    print(f"  ✓ per_event_mae.png ({n} events)")
+
+
+def plot_intensity_heatmaps(test_preds, test_reals, test_idx, event_folders,
+                            station_mgr, fig_dir, top_n=5):
+    """
+    Test set 中 PGA 最大的 top_n 事件：真實 vs 預測震度並排熱力圖。
+    """
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib as mpl
+        mpl.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'SimHei', 'DejaVu Sans']
+        mpl.rcParams['axes.unicode_minus'] = False
+        from scipy.interpolate import griddata
+        import cartopy.crs as ccrs
+        import cartopy.feature as cfeature
+    except ImportError as e:
+        print(f"  [SKIP] Heatmap dependency missing: {e}")
+        return
+
+    cwa_colors = [
+        '#C6FFC6', '#00FF00', '#FFFF00', '#FF8000', '#FF0000',
+        '#990000', '#663300', '#CC00CC', '#800080'
+    ]
+    cwa_labels = ['1級', '2級', '3級', '4級', '5弱', '5強', '6弱', '6強', '7級']
+    custom_levels = np.linspace(0.5, 9.5, 10)
+
+    grid_lon = np.linspace(119.5, 122.5, 150)
+    grid_lat = np.linspace(21.5, 25.5, 150)
+    glon, glat = np.meshgrid(grid_lon, grid_lat)
+
+    all_coords = station_mgr.all_coords  # (166, 2) [lon, lat]
+
+    # 決定要畫哪些事件 (top_n=None → 全部, 按 PGA 大到小排序)
+    n_test = test_reals.shape[0]
+    event_max_pga = []
+    for i in range(n_test):
+        valid = test_reals[i].squeeze(-1) > 0
+        event_max_pga.append(test_reals[i][valid].max().item() if valid.any() else 0.0)
+    event_max_pga = np.array(event_max_pga)
+
+    if top_n is None:
+        top_n = n_test  # 畫全部
+    else:
+        top_n = min(top_n, n_test)
+    plot_pos = np.argsort(event_max_pga)[-top_n:][::-1]  # PGA 大→小
+
+    print(f"  Plotting heatmaps for {top_n} events (sorted by max PGA)...")
+
+    for pos in plot_pos:
+        event_name = event_folders[test_idx[pos]]
+        pred_pga = test_preds[pos].squeeze(-1).numpy()
+        true_pga = test_reals[pos].squeeze(-1).numpy()
+
+        valid = true_pga > 0
+        if not valid.any():
+            continue
+
+        lons, lats = all_coords[valid, 0], all_coords[valid, 1]
+        true_int = np.array([pga_to_intensity(v) for v in true_pga[valid]])
+        pred_int = np.array([pga_to_intensity(v) for v in pred_pga[valid]])
+
+        max_i = np.argmax(true_pga[valid])
+        epi_lon, epi_lat = lons[max_i], lats[max_i]
+
+        true_grid = griddata((lons, lats), true_int, (glon, glat), method='linear')
+        pred_grid = griddata((lons, lats), pred_int, (glon, glat), method='linear')
+
+        fig, axes = plt.subplots(1, 2, figsize=(16, 10),
+                                 subplot_kw={"projection": ccrs.PlateCarree()})
+
+        contour = None
+        for ax, gdata, title in zip(
+            axes, [true_grid, pred_grid],
+            ['真實震度 (True)', '預測震度 (Predicted)']
+        ):
+            ax.add_feature(cfeature.OCEAN, zorder=2, facecolor='white', edgecolor='none')
+            ax.add_feature(cfeature.COASTLINE, zorder=3, linewidth=1)
+            ax.set_extent([119.5, 122.5, 21.5, 25.5], crs=ccrs.PlateCarree())
+
+            contour = ax.contourf(
+                glon, glat, gdata, levels=custom_levels, colors=cwa_colors,
+                transform=ccrs.PlateCarree(), zorder=1, extend='neither'
+            )
+            ax.plot(epi_lon, epi_lat, marker='*', markersize=20,
+                    markerfacecolor='yellow', markeredgecolor='black',
+                    markeredgewidth=1.5, transform=ccrs.PlateCarree(), zorder=5)
+            ax.set_title(title, fontsize=14)
+
+        cbar = fig.colorbar(contour, ax=axes, shrink=0.5, pad=0.03, aspect=20)
+        cbar.set_label('震度階級 (Intensity)', fontsize=12)
+        cbar.set_ticks([1, 2, 3, 4, 5, 6, 7, 8, 9])
+        cbar.set_ticklabels(cwa_labels, fontsize=10)
+
+        event_mae = np.abs(pred_pga[valid] - true_pga[valid]).mean()
+        fig.suptitle(f'Event {event_name} — True vs Predicted (MAE={event_mae:.2f} gal)',
+                     fontsize=16, y=0.98)
+
+        plt.savefig(fig_dir / f"heatmap_{event_name}.png", dpi=200, bbox_inches="tight")
+        plt.close()
+        print(f"  ✓ heatmap_{event_name}.png (max_PGA={event_max_pga[pos]:.1f})")
 
 
 # =============================================================================
